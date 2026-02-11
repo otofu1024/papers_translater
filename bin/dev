@@ -1,0 +1,76 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOG_DIR="$ROOT_DIR/outputs/dev-logs"
+mkdir -p "$LOG_DIR"
+
+OCR_BASE_URL="${OCR_BASE_URL:-http://127.0.0.1:8080}"
+OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8000}"
+UI_BASE_URL="${UI_BASE_URL:-http://127.0.0.1:5173}"
+
+typeset -a PIDS=()
+
+is_up() {
+  local url="$1"
+  curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+}
+
+start_bg() {
+  local name="$1"
+  local log_file="$2"
+  shift 2
+  echo "[dev] starting $name ..."
+  "$@" >"$log_file" 2>&1 &
+  PIDS+=($!)
+}
+
+cleanup() {
+  echo "[dev] stopping..."
+  for pid in "${PIDS[@]:-}"; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+}
+
+trap cleanup INT TERM EXIT
+
+if is_up "$OCR_BASE_URL/docs"; then
+  echo "[dev] OCR server already up: $OCR_BASE_URL"
+else
+  start_bg "OCR server" "$LOG_DIR/ocr.log" "$ROOT_DIR/bin/ocr"
+  sleep 2
+  if ! is_up "$OCR_BASE_URL/docs"; then
+    echo "[dev] OCR server failed to start. See $LOG_DIR/ocr.log" >&2
+    exit 1
+  fi
+fi
+
+if ! is_up "$OLLAMA_BASE_URL/api/tags"; then
+  echo "[dev] Ollama is not reachable at $OLLAMA_BASE_URL" >&2
+  echo "[dev] Start it with: ollama serve" >&2
+  exit 1
+fi
+echo "[dev] Ollama reachable: $OLLAMA_BASE_URL"
+
+if is_up "$API_BASE_URL/health"; then
+  echo "[dev] API already up: $API_BASE_URL"
+else
+  start_bg "Backend API" "$LOG_DIR/api.log" "$ROOT_DIR/bin/api"
+fi
+
+if is_up "$UI_BASE_URL"; then
+  echo "[dev] UI already up: $UI_BASE_URL"
+else
+  start_bg "Frontend UI" "$LOG_DIR/ui.log" "$ROOT_DIR/bin/ui"
+fi
+
+echo "[dev] running"
+echo "  OCR:    $OCR_BASE_URL"
+echo "  API:    $API_BASE_URL"
+echo "  UI:     $UI_BASE_URL"
+echo "  logs:   $LOG_DIR"
+echo "Press Ctrl+C to stop child processes."
+
+wait
+

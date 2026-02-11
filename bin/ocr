@@ -1,0 +1,17 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+GLM_DIR="$ROOT_DIR/backend/third_party/GLM-OCR"
+OCR_PORT="${OCR_PORT:-8080}"
+MLX_SERVER="$GLM_DIR/.venv-mlx/bin/mlx_vlm.server"
+
+if [[ ! -x "$MLX_SERVER" ]]; then
+  echo "[ocr] mlx_vlm.server not found at: $MLX_SERVER" >&2
+  echo "[ocr] Build env first in $GLM_DIR (.venv-mlx)." >&2
+  exit 1
+fi
+
+cd "$GLM_DIR"
+exec "$MLX_SERVER" --trust-remote-code --port "$OCR_PORT"
+

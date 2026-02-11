@@ -7,3 +7,4 @@ dist/
 outputs/
 __pycache__/
 *.pyc
+*.tsbuildinfo
