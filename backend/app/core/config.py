@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     ocr_sdk_entrypoint: str | None = None
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "translategemma:12b-it-q4_K_M"
+    ollama_timeout_sec: float = 120.0
+    translate_max_chars: int = 1400
     render_dpi: int = 350
     output_dir: str = "outputs"
     http_timeout_sec: float = 5.0
