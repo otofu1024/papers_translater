@@ -67,8 +67,10 @@ async def run_job(job_id: str, settings: Settings | None = None) -> None:
 
         ocr_client = OCRClient(
             base_url=settings.ocr_base_url,
-            timeout_sec=settings.http_timeout_sec,
+            timeout_sec=settings.ocr_timeout_sec,
             parse_paths=settings.ocr_parse_path_list,
+            model=settings.ocr_model,
+            prompt=settings.ocr_prompt,
             sdk_entrypoint=settings.ocr_sdk_entrypoint,
         )
         ollama_client = OllamaClient(
@@ -144,4 +146,3 @@ async def run_job(job_id: str, settings: Settings | None = None) -> None:
             error=str(exc),
         )
         save_meta(paths.meta_json, failed_meta)
-

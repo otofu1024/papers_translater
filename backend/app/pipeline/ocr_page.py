@@ -44,6 +44,93 @@ def _extract_blocks(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _extract_content_from_choices(raw: dict[str, Any]) -> str | None:
+    choices = raw.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    return None
+
+
+def _parse_array_blocks(raw_array: list[Any], page: int) -> list[Block]:
+    if not raw_array:
+        return []
+    first = raw_array[0] if isinstance(raw_array[0], list) else raw_array
+    if not isinstance(first, list):
+        return []
+
+    blocks: list[Block] = []
+    for idx, item in enumerate(first, start=1):
+        if not isinstance(item, dict):
+            continue
+        text = _extract_text(item)
+        if not text:
+            continue
+        bbox = item.get("bbox_2d") or item.get("bbox") or item.get("box") or [0, 0, 0, 0]
+        blocks.append(
+            Block(
+                id=str(item.get("id") or item.get("index") or f"p{page:03d}-b{idx:04d}"),
+                type=str(item.get("type") or item.get("label") or "paragraph"),
+                bbox=_as_bbox(bbox),
+                text=text,
+                page=page,
+            )
+        )
+    return blocks
+
+
+def _parse_text_to_blocks(text: str, page: int) -> list[Block]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+    try:
+        parsed = json.loads(stripped)
+    except ValueError:
+        parsed = None
+
+    if isinstance(parsed, list):
+        blocks = _parse_array_blocks(parsed, page=page)
+        if blocks:
+            return blocks
+    if isinstance(parsed, dict):
+        blocks = _extract_blocks(parsed)
+        if blocks:
+            normalized: list[Block] = []
+            for idx, item in enumerate(blocks, start=1):
+                txt = _extract_text(item)
+                if not txt:
+                    continue
+                normalized.append(
+                    Block(
+                        id=str(item.get("id") or f"p{page:03d}-b{idx:04d}"),
+                        type=str(item.get("type") or item.get("label") or "paragraph"),
+                        bbox=_as_bbox(item.get("bbox") or item.get("box") or item.get("coordinates")),
+                        text=txt,
+                        page=page,
+                    )
+                )
+            if normalized:
+                return normalized
+
+    return [
+        Block(
+            id=f"p{page:03d}-b0001",
+            type="paragraph",
+            bbox=[0.0, 0.0, 0.0, 0.0],
+            text=stripped,
+            page=page,
+        )
+    ]
+
+
 def _extract_image_size(raw: dict[str, Any]) -> tuple[int, int]:
     width_keys = ("img_w", "width", "image_width", "w")
     height_keys = ("img_h", "height", "image_height", "h")
@@ -67,24 +154,36 @@ def _extract_image_size(raw: dict[str, Any]) -> tuple[int, int]:
     return width, height
 
 
-def normalize_ocr_result(raw: dict[str, Any], page: int) -> PageResult:
-    raw_blocks = _extract_blocks(raw)
+def normalize_ocr_result(raw: Any, page: int) -> PageResult:
     blocks: list[Block] = []
+    img_w = 0
+    img_h = 0
 
-    for idx, item in enumerate(raw_blocks, start=1):
-        text = _extract_text(item)
-        if not text:
-            continue
-        block = Block(
-            id=str(item.get("id") or f"p{page:03d}-b{idx:04d}"),
-            type=str(item.get("type") or item.get("label") or "paragraph"),
-            bbox=_as_bbox(item.get("bbox") or item.get("box") or item.get("coordinates")),
-            text=text,
-            page=page,
-        )
-        blocks.append(block)
+    if isinstance(raw, dict):
+        raw_blocks = _extract_blocks(raw)
+        for idx, item in enumerate(raw_blocks, start=1):
+            text = _extract_text(item)
+            if not text:
+                continue
+            blocks.append(
+                Block(
+                    id=str(item.get("id") or f"p{page:03d}-b{idx:04d}"),
+                    type=str(item.get("type") or item.get("label") or "paragraph"),
+                    bbox=_as_bbox(item.get("bbox") or item.get("box") or item.get("coordinates")),
+                    text=text,
+                    page=page,
+                )
+            )
+        img_w, img_h = _extract_image_size(raw)
 
-    img_w, img_h = _extract_image_size(raw)
+        if not blocks:
+            content = _extract_content_from_choices(raw)
+            if content:
+                blocks = _parse_text_to_blocks(content, page=page)
+
+    if not blocks:
+        blocks = _parse_array_blocks(raw if isinstance(raw, list) else [], page=page)
+
     return PageResult(page=page, img_w=img_w, img_h=img_h, blocks=blocks)
 
 
@@ -101,5 +200,15 @@ async def run_ocr_for_page(
             json.dumps(raw, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-    return normalize_ocr_result(raw, page=page)
+    page_result = normalize_ocr_result(raw, page=page)
+    if page_result.img_w <= 0 or page_result.img_h <= 0:
+        try:
+            from PIL import Image
 
+            with Image.open(image_path) as image:
+                page_result = page_result.model_copy(
+                    update={"img_w": image.width, "img_h": image.height}
+                )
+        except Exception:  # noqa: BLE001
+            pass
+    return page_result

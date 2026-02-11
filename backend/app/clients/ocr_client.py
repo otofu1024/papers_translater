@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import importlib
+import mimetypes
 from inspect import iscoroutine
 from pathlib import Path
 from typing import Any, Callable
@@ -18,11 +20,17 @@ class OCRClient:
         base_url: str,
         timeout_sec: float = 30.0,
         parse_paths: list[str] | None = None,
+        model: str | None = None,
+        prompt: str | None = None,
         sdk_entrypoint: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
         self.parse_paths = parse_paths or ["/ocr"]
+        self.model = model
+        self.prompt = prompt or (
+            "Recognize the text in the image and output in Markdown format."
+        )
         self.sdk_runner = self._load_sdk_runner(sdk_entrypoint)
 
     async def parse_image(self, image_path: Path) -> dict[str, Any]:
@@ -48,11 +56,7 @@ class OCRClient:
             for path in self.parse_paths:
                 url = f"{self.base_url}{path}"
                 try:
-                    with image_path.open("rb") as f:
-                        response = await client.post(
-                            url,
-                            files={"file": (image_path.name, f, "image/png")},
-                        )
+                    response = await self._post_by_path(client, path, url, image_path)
                 except httpx.HTTPError as exc:
                     errors.append(f"{url}: {exc.__class__.__name__}")
                     continue
@@ -73,6 +77,58 @@ class OCRClient:
         joined = "; ".join(errors) if errors else "unknown error"
         raise OCRClientError(f"Failed to parse image via OCR server: {joined}")
 
+    async def _post_by_path(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        url: str,
+        image_path: Path,
+    ) -> httpx.Response:
+        normalized = path.lower()
+        if "chat/completions" in normalized:
+            payload = self._build_chat_completions_payload(image_path)
+            return await client.post(url, json=payload)
+
+        mime = self._guess_mime_type(image_path)
+        with image_path.open("rb") as f:
+            return await client.post(
+                url,
+                files={"file": (image_path.name, f, mime)},
+            )
+
+    def _build_chat_completions_payload(self, image_path: Path) -> dict[str, Any]:
+        data_url = self._to_data_url(image_path)
+        payload: dict[str, Any] = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": self.prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+            "max_tokens": 4096,
+            "temperature": 0.1,
+        }
+        if self.model:
+            payload["model"] = self.model
+        return payload
+
+    @staticmethod
+    def _to_data_url(image_path: Path) -> str:
+        image_bytes = image_path.read_bytes()
+        encoded = base64.b64encode(image_bytes).decode("utf-8")
+        mime = OCRClient._guess_mime_type(image_path)
+        return f"data:{mime};base64,{encoded}"
+
+    @staticmethod
+    def _guess_mime_type(image_path: Path) -> str:
+        mime, _ = mimetypes.guess_type(str(image_path))
+        if mime:
+            return mime
+        return "image/png"
+
     @staticmethod
     def _load_sdk_runner(entrypoint: str | None) -> Callable[..., Any] | None:
         if not entrypoint:
@@ -86,4 +142,3 @@ class OCRClient:
         if runner is None or not callable(runner):
             raise OCRClientError(f"OCR SDK entrypoint not callable: {entrypoint}")
         return runner
-
