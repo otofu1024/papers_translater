@@ -4,11 +4,12 @@ import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Path as FPath, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Path as FPath, UploadFile, status
 from fastapi.responses import FileResponse, PlainTextResponse
 
 from app.core.config import get_settings
 from app.models.schemas import JobCreateResponse, JobMeta
+from app.pipeline.run_job import run_job
 from app.store.paths import JobPaths, build_job_paths, ensure_job_dirs
 from app.store.state import init_meta, load_meta, save_meta
 
@@ -39,7 +40,7 @@ def _load_meta_or_404(meta_path: Path) -> JobMeta:
 
 
 @router.post("", response_model=JobCreateResponse, status_code=status.HTTP_201_CREATED)
-async def create_job(file: UploadFile = File(...)) -> JobCreateResponse:
+async def create_job(background_tasks: BackgroundTasks, file: UploadFile = File(...)) -> JobCreateResponse:
     _assert_pdf(file)
 
     job_id = uuid.uuid4().hex
@@ -56,6 +57,7 @@ async def create_job(file: UploadFile = File(...)) -> JobCreateResponse:
         extra={"input_bytes": paths.input_pdf.stat().st_size},
     )
     save_meta(paths.meta_json, meta)
+    background_tasks.add_task(run_job, job_id)
     await file.close()
     return JobCreateResponse(job_id=job_id)
 
