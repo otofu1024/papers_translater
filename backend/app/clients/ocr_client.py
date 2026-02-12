@@ -23,6 +23,7 @@ class OCRClient:
         model: str | None = None,
         prompt: str | None = None,
         sdk_entrypoint: str | None = None,
+        max_tokens: int = 2048,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
@@ -32,6 +33,7 @@ class OCRClient:
             "Recognize the text in the image and output in Markdown format."
         )
         self.sdk_runner = self._load_sdk_runner(sdk_entrypoint)
+        self.max_tokens = max(256, max_tokens)
 
     async def parse_image(self, image_path: Path) -> dict[str, Any]:
         if not image_path.exists():
@@ -108,7 +110,7 @@ class OCRClient:
                     ],
                 }
             ],
-            "max_tokens": 4096,
+            "max_tokens": self.max_tokens,
             "temperature": 0.1,
         }
         if self.model:

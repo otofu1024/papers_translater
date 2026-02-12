@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         "Recognize the text in the image and output in Markdown format. "
         "Preserve the original layout as much as possible."
     )
+    ocr_max_tokens: int = 2048
     ocr_timeout_sec: float = 180.0
     ocr_sdk_entrypoint: str | None = None
     ollama_base_url: str = "http://127.0.0.1:11434"

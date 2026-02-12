@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 
 from app.clients.ollama_client import OllamaClient
 from app.models.schemas import Block, PageResult
@@ -73,9 +74,18 @@ async def translate_block(block: Block, client: OllamaClient, max_chars: int) ->
     return block.model_copy(update={"translated_text": translated})
 
 
-async def translate_page_blocks(page: PageResult, client: OllamaClient, max_chars: int) -> PageResult:
+async def translate_page_blocks(
+    page: PageResult,
+    client: OllamaClient,
+    max_chars: int,
+    on_block_done: Callable[[int, int], Awaitable[None] | None] | None = None,
+) -> PageResult:
     translated_blocks: list[Block] = []
-    for block in page.blocks:
+    total = len(page.blocks)
+    for idx, block in enumerate(page.blocks, start=1):
         translated_blocks.append(await translate_block(block, client=client, max_chars=max_chars))
+        if on_block_done is not None:
+            callback_result = on_block_done(idx, total)
+            if callback_result is not None:
+                await callback_result
     return page.model_copy(update={"blocks": translated_blocks})
-

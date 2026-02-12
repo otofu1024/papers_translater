@@ -68,6 +68,7 @@ cp .env.example .env
 主な項目:
 
 - `OCR_BASE_URL` (default: `http://127.0.0.1:8080`)
+- `OCR_MAX_TOKENS` (default: `2048`)
 - `OLLAMA_BASE_URL` (default: `http://127.0.0.1:11434`)
 - `OLLAMA_MODEL` (default: `translategemma:12b-it-q4_K_M`)
 - `RENDER_DPI` (default: `350`)
@@ -106,4 +107,3 @@ cp .env.example .env
 
 - TranslateGemma / Gemma 系モデルを利用する際は、Google/Gemmaの利用規約・配布条件を必ず確認してください。
 - GLM-OCR は別リポジトリを submodule として参照しています。ライセンスは `backend/third_party/GLM-OCR/LICENSE` を確認してください。
-

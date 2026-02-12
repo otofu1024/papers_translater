@@ -38,6 +38,15 @@ def _progress_for_page(page_index: int, total_pages: int) -> float:
     return min(0.95, 0.2 + (0.75 * page_index / total_pages))
 
 
+def _progress_for_page_phase(page_index: int, total_pages: int, phase: float) -> float:
+    if total_pages <= 0:
+        return 0.2
+    clamped_phase = max(0.0, min(1.0, phase))
+    page_base = 0.2 + (0.75 * (page_index - 1) / total_pages)
+    page_span = 0.75 / total_pages
+    return min(0.95, page_base + (page_span * clamped_phase))
+
+
 async def run_job(job_id: str, settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     paths = build_job_paths(job_id=job_id, settings=settings)
@@ -72,6 +81,7 @@ async def run_job(job_id: str, settings: Settings | None = None) -> None:
             model=settings.ocr_model,
             prompt=settings.ocr_prompt,
             sdk_entrypoint=settings.ocr_sdk_entrypoint,
+            max_tokens=settings.ocr_max_tokens,
         )
         ollama_client = OllamaClient(
             base_url=settings.ollama_base_url,
@@ -88,7 +98,7 @@ async def run_job(job_id: str, settings: Settings | None = None) -> None:
                 update_meta(
                     meta,
                     stage=f"ocr:{idx}/{total}",
-                    progress=_progress_for_page(idx - 1, total),
+                    progress=_progress_for_page_phase(idx, total, 0.0),
                 ),
             )
 
@@ -100,12 +110,36 @@ async def run_job(job_id: str, settings: Settings | None = None) -> None:
                 ocr_output_path=ocr_json_path,
             )
             page_result = order_page_blocks(page_result)
+            block_total = len(page_result.blocks)
+            _append_job_log(paths, f"Page {idx}/{total}: OCR done ({block_total} blocks)")
+            meta = _save(
+                paths,
+                update_meta(
+                    meta,
+                    stage=f"translate:{idx}/{total}:0/{block_total}",
+                    progress=_progress_for_page_phase(idx, total, 0.4),
+                ),
+            )
 
             _append_job_log(paths, f"Page {idx}/{total}: translation")
+
+            async def on_block_done(done: int, total_blocks: int) -> None:
+                nonlocal meta
+                ratio = done / max(1, total_blocks)
+                meta = _save(
+                    paths,
+                    update_meta(
+                        meta,
+                        stage=f"translate:{idx}/{total}:{done}/{total_blocks}",
+                        progress=_progress_for_page_phase(idx, total, 0.4 + (0.6 * ratio)),
+                    ),
+                )
+
             page_result = await translate_page_blocks(
                 page_result,
                 client=ollama_client,
                 max_chars=settings.translate_max_chars,
+                on_block_done=on_block_done,
             )
 
             page_md_path = paths.md_dir / f"{idx:03d}.md"

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from app.clients.ocr_client import OCRClient
 from app.models.schemas import Block, PageResult
+
+PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n+")
+INLINE_SPACE_RE = re.compile(r"\s+")
+FALLBACK_TOTAL_CHAR_LIMIT = 12000
+FALLBACK_BLOCK_CHAR_LIMIT = 1800
 
 
 def _as_bbox(value: Any) -> list[float]:
@@ -120,15 +126,75 @@ def _parse_text_to_blocks(text: str, page: int) -> list[Block]:
             if normalized:
                 return normalized
 
-    return [
-        Block(
-            id=f"p{page:03d}-b0001",
-            type="paragraph",
-            bbox=[0.0, 0.0, 0.0, 0.0],
-            text=stripped,
-            page=page,
+    return _fallback_text_blocks(stripped, page=page)
+
+
+def _fallback_text_blocks(text: str, page: int) -> list[Block]:
+    trimmed = text.strip()
+    if not trimmed:
+        return []
+
+    if len(trimmed) > FALLBACK_TOTAL_CHAR_LIMIT:
+        trimmed = trimmed[:FALLBACK_TOTAL_CHAR_LIMIT].rstrip()
+
+    segments = _split_segments(trimmed)
+    blocks: list[Block] = []
+    for idx, segment in enumerate(segments, start=1):
+        blocks.append(
+            Block(
+                id=f"p{page:03d}-b{idx:04d}",
+                type="paragraph",
+                bbox=[0.0, 0.0, 0.0, 0.0],
+                text=segment,
+                page=page,
+            )
         )
-    ]
+    return blocks
+
+
+def _split_segments(text: str) -> list[str]:
+    raw_segments = [part.strip() for part in PARAGRAPH_SPLIT_RE.split(text) if part.strip()]
+    if not raw_segments:
+        raw_segments = [text.strip()]
+
+    deduped: list[str] = []
+    prev_key = ""
+    for segment in raw_segments:
+        key = _segment_key(segment)
+        if key and key == prev_key:
+            continue
+        prev_key = key
+        deduped.extend(_split_long_segment(segment, max_chars=FALLBACK_BLOCK_CHAR_LIMIT))
+
+    return deduped or [text.strip()]
+
+
+def _segment_key(text: str) -> str:
+    return INLINE_SPACE_RE.sub(" ", text).strip().lower()
+
+
+def _split_long_segment(text: str, max_chars: int) -> list[str]:
+    if len(text) <= max_chars:
+        return [text]
+
+    parts: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + max_chars)
+        if end < len(text):
+            split_at = text.rfind("\n", start, end)
+            if split_at <= start:
+                split_at = text.rfind(". ", start, end)
+            if split_at <= start:
+                split_at = end
+        else:
+            split_at = end
+
+        chunk = text[start:split_at].strip()
+        if chunk:
+            parts.append(chunk)
+        start = split_at
+    return parts
 
 
 def _extract_image_size(raw: dict[str, Any]) -> tuple[int, int]:
